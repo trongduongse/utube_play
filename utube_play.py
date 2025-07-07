@@ -1,114 +1,71 @@
 #!/usr/bin/env python3
 
-import os
-import re
-import json
-import requests
-import subprocess
-import sys
-import threading
+
+import os, re, json, requests, subprocess, sys, threading, time, socket
 from tkinter import *
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from io import BytesIO
 
-# --- Config ---
-MPV_PATH = r"mpv"
-YTDLP_PATH = r"yt-dlp"
+
+MPV_PATH, YTDLP_PATH = "mpv", "yt-dlp"
 CACHE_DIR = os.path.join(os.path.expanduser('~'), 'youtube_cache')
 AUTOSAVE_PATH = os.path.join(CACHE_DIR, 'autosave_playlist.m3u')
-
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # --- YouTube Search ---
-def search_youtube(keyword):
-    url = f"https://www.youtube.com/results?search_query={keyword}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    resp = requests.get(url, headers=headers)
-    video_pattern = r'"videoRenderer":\{(.*?)\},"navigationEndpoint"'
-    matches = re.findall(video_pattern, resp.text)
-    videos = []
-    for block in matches:
-        id_match = re.search(r'"videoId":"(.*?)"', block)
-        title_match = re.search(r'"title":\{"runs":\[\{"text":"(.*?)"\}', block)
-        if not title_match:
-            title_match = re.search(r'"title":\{"simpleText":"(.*?)"', block)
-        thumb_match = re.search(r'"thumbnails":\[\{"url":"(.*?)"', block)
-        if id_match and title_match and thumb_match:
-            videos.append({
-                'videoId': id_match.group(1),
-                'title': title_match.group(1),
-                'thumbnail': thumb_match.group(1)
-            })
-    return videos
+def search_youtube(q):
+    r = requests.get(f"https://www.youtube.com/results?search_query={q}", headers={'User-Agent': 'Mozilla/5.0'})
+    pat = r'"videoRenderer":\{(.*?)\},"navigationEndpoint"'
+    vids = []
+    for b in re.findall(pat, r.text):
+        i = re.search(r'"videoId":"(.*?)"', b)
+        t = re.search(r'"title":\{"runs":\[\{"text":"(.*?)"\}', b) or re.search(r'"title":\{"simpleText":"(.*?)"', b)
+        h = re.search(r'"thumbnails":\[\{"url":"(.*?)"', b)
+        if i and t and h:
+            vids.append({'videoId': i.group(1), 'title': t.group(1), 'thumbnail': h.group(1)})
+    return vids
 
 # --- Media Caching ---
 def sanitize_filename(s):
-    # Remove or replace characters not allowed in Windows filenames
     return re.sub(r'[\\/:*?"<>|]', '_', s)
 
-def get_cached_media_path(video_id, audio_only, title=None):
-    ext = 'm4a' if audio_only else 'webm'
-    if title:
-        safe_title = sanitize_filename(title)[:80]  # Limit length
-        return os.path.join(CACHE_DIR, f"{video_id}_{safe_title}.{ext}")
-    else:
-        return os.path.join(CACHE_DIR, f"{video_id}.{ext}")
+def get_cached_media_path(vid, aud, title=None):
+    ext = 'm4a' if aud else 'webm'
+    return os.path.join(CACHE_DIR, f"{vid}_{sanitize_filename(title)[:80] if title else vid}.{ext}")
 
-def download_media_if_needed(video_id, video_link, audio_only, title=None, max_res=480, log_callback=None):
-    media_path = get_cached_media_path(video_id, audio_only, title)
-    if not os.path.exists(media_path):
-        if audio_only:
-            args = [YTDLP_PATH, '-f', 'bestaudio[ext=m4a]/bestaudio/best', '-o', media_path, video_link]
-        else:
-            # Limit video to selected max resolution
-            args = [YTDLP_PATH, '-f', f'bestvideo[ext=webm][height<={max_res}]+bestaudio[ext=webm]/bestvideo[height<={max_res}]+bestaudio/best[height<={max_res}]', '-o', media_path, video_link]
+def download_media_if_needed(vid, link, aud, title=None, max_res=480, log_callback=None):
+    p = get_cached_media_path(vid, aud, title)
+    if not os.path.exists(p):
+        args = [YTDLP_PATH, '-f', 'bestaudio[ext=m4a]/bestaudio/best', '-o', p, link] if aud else [YTDLP_PATH, '-f', f'bestvideo[ext=webm][height<={max_res}]+bestaudio[ext=webm]/bestvideo[height<={max_res}]+bestaudio/best[height<={max_res}]', '-o', p, link]
         try:
-            proc = subprocess.run(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
-                encoding='utf-8',
-                errors='replace'
-            )
-            if log_callback:
-                log_callback(proc.stdout)
+            proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0, encoding='utf-8', errors='replace')
+            if log_callback: log_callback(proc.stdout)
             if proc.returncode != 0:
-                if log_callback:
-                    log_callback(f"yt-dlp failed to download media!\n")
+                if log_callback: log_callback("yt-dlp failed to download media!\n")
                 messagebox.showerror("yt-dlp Error", "yt-dlp failed to download media!")
                 return None
         except Exception as e:
-            if log_callback:
-                log_callback(f"yt-dlp Exception: {e}\n")
+            if log_callback: log_callback(f"yt-dlp Exception: {e}\n")
             messagebox.showerror("yt-dlp Error", f"yt-dlp exception: {e}")
             return None
-    return media_path
+    return p
 
 # --- Playlist Save/Load ---
-def save_playlist_to_file(playlist, file_path):
-    with open(file_path, 'w', encoding='utf-8') as f:
-        for item in playlist:
-            title = item['title'].replace('\n', ' ').replace('\r', ' ')
-            f.write(f"# {title}\n{item['link']}\n")
+def save_playlist_to_file(pl, fp):
+    with open(fp, 'w', encoding='utf-8') as f:
+        for i in pl:
+            f.write(f"# {i['title'].replace(chr(10),' ').replace(chr(13),' ')}\n{i['link']}\n")
 
-def load_playlist_from_file(file_path):
-    playlist = []
-    if not os.path.exists(file_path):
-        return playlist
-    with open(file_path, 'r', encoding='utf-8') as f:
-        lines = [line.strip() for line in f if line.strip()]
-    last_title = None
-    for line in lines:
-        if line.startswith('# '):
-            last_title = line[2:]
-        elif line.startswith('http'):
-            title = last_title if last_title else line
-            playlist.append({'link': line, 'title': title})
-            last_title = None
-    return playlist
+def load_playlist_from_file(fp):
+    pl, last = [], None
+    if not os.path.exists(fp): return pl
+    with open(fp, 'r', encoding='utf-8') as f:
+        for l in [x.strip() for x in f if x.strip()]:
+            if l.startswith('# '): last = l[2:]
+            elif l.startswith('http'):
+                pl.append({'link': l, 'title': last if last else l}); last = None
+    return pl
 
 # --- GUI ---
 class YouTubeApp:
@@ -177,10 +134,18 @@ class YouTubeApp:
         main_frame = Frame(self.notebook)
         self.notebook.add(main_frame, text="Main")
 
+        # Make main_frame fully responsive
+        main_frame.grid_rowconfigure(0, weight=0)  # Top bar
+        main_frame.grid_rowconfigure(1, weight=1)  # Main content
+        main_frame.grid_columnconfigure(0, weight=3)
+        main_frame.grid_columnconfigure(1, weight=2)
+
         # --- Top bar: Search ---
         topbar = Frame(main_frame, pady=8)
         topbar.grid(row=0, column=0, columnspan=2, sticky="ew")
-        topbar.grid_columnconfigure(1, weight=1)
+        for i in range(4):
+            topbar.grid_columnconfigure(i, weight=0)
+        topbar.grid_columnconfigure(1, weight=1)  # Make search entry expand
         self.search_var = StringVar()
         search_entry = Entry(topbar, textvariable=self.search_var, font=('Segoe UI', 12))
         search_entry.grid(row=0, column=0, padx=(8, 4), sticky="ew")
@@ -215,7 +180,10 @@ class YouTubeApp:
         # --- Right: Playlist and Controls ---
         right_frame = Frame(main_frame, padx=8, pady=4)
         right_frame.grid(row=1, column=1, sticky="nsew")
-        right_frame.grid_rowconfigure(2, weight=1)
+        right_frame.grid_rowconfigure(0, weight=0)  # Controls
+        right_frame.grid_rowconfigure(1, weight=0)  # Label
+        right_frame.grid_rowconfigure(2, weight=1)  # Playlist box
+        right_frame.grid_rowconfigure(3, weight=0)  # Playback controls
         right_frame.grid_columnconfigure(0, weight=1)
 
         # Playlist controls (top of right frame)
@@ -245,6 +213,11 @@ class YouTubeApp:
         Button(playback_frame, text="Next", font=('Segoe UI', 10), command=self.next_track).pack(side=LEFT, padx=4)
         self.status_label = Label(playback_frame, text="Idle", bg='gray', width=10)
         self.status_label.pack(side=LEFT, padx=12)
+
+        # --- Add frames to main_frame grid (for resize) ---
+        # Already done above, but ensure sticky is nsew for both frames
+        left_frame.grid(row=1, column=0, sticky="nsew")
+        right_frame.grid(row=1, column=1, sticky="nsew")
     def _on_mousewheel_search(self, event):
         # Windows: event.delta is multiple of 120
         self.search_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
