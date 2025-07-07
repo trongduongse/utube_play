@@ -75,9 +75,7 @@ class YouTubeApp:
         self.playlist = []
         self.playlist_index = 0
         self.audio_only = BooleanVar(value=True)
-        self.max_res_480p = BooleanVar(value=True)
-        self.max_res_720p = BooleanVar(value=False)
-        self.max_res_1080p = BooleanVar(value=False)
+        self.resolution = StringVar(value="480p")
         self.mpv_process = None
         self.search_results = []
         self.thumbnails = {}
@@ -152,12 +150,11 @@ class YouTubeApp:
         search_entry.bind('<Return>', lambda e: self.search_and_display())
         Button(topbar, text="Search", font=('Segoe UI', 10), command=self.search_and_display).grid(row=0, column=1, padx=4)
         Checkbutton(topbar, text="Audio Only (default)", variable=self.audio_only, font=('Segoe UI', 10)).grid(row=0, column=2, padx=4)
-        # Resolution checkboxes
+        # Resolution dropdown (OptionMenu)
         res_frame = Frame(topbar)
         res_frame.grid(row=0, column=3, padx=4)
-        Checkbutton(res_frame, text="480p", variable=self.max_res_480p, font=('Segoe UI', 10), command=self._res_checkbox_logic).pack(side=LEFT)
-        Checkbutton(res_frame, text="720p", variable=self.max_res_720p, font=('Segoe UI', 10), command=self._res_checkbox_logic).pack(side=LEFT)
-        Checkbutton(res_frame, text="1080p", variable=self.max_res_1080p, font=('Segoe UI', 10), command=self._res_checkbox_logic).pack(side=LEFT)
+        Label(res_frame, text="Resolution:", font=('Segoe UI', 10)).pack(side=LEFT)
+        OptionMenu(res_frame, self.resolution, "480p", "720p", "1080p").pack(side=LEFT)
 
         # --- Left: Search Results ---
         left_frame = Frame(main_frame, padx=8, pady=4)
@@ -244,20 +241,7 @@ class YouTubeApp:
         self.debug_text.see(END)
         self.debug_text.config(state='disabled')
 
-    def _res_checkbox_logic(self):
-        # Only one resolution can be selected at a time
-        if self.max_res_480p.get():
-            self.max_res_720p.set(False)
-            self.max_res_1080p.set(False)
-        elif self.max_res_720p.get():
-            self.max_res_480p.set(False)
-            self.max_res_1080p.set(False)
-        elif self.max_res_1080p.get():
-            self.max_res_480p.set(False)
-            self.max_res_720p.set(False)
-        else:
-            # Always keep at least one checked (default to 480p)
-            self.max_res_480p.set(True)
+    # No longer needed: _res_checkbox_logic
 
     def search_and_display(self):
         keyword = self.search_var.get().strip()
@@ -346,13 +330,9 @@ class YouTubeApp:
             self.playlist_index = 0
             return
         audio_only = self.audio_only.get()
-        # Determine max resolution
-        if self.max_res_1080p.get():
-            max_res = 1080
-        elif self.max_res_720p.get():
-            max_res = 720
-        else:
-            max_res = 480
+        # Determine max resolution from dropdown
+        res_map = {"480p": 480, "720p": 720, "1080p": 1080}
+        max_res = res_map.get(self.resolution.get(), 480)
         # Prepare list of media paths or links for all playlist items
         mpv_playlist = []
         for item in self.playlist:
