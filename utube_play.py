@@ -171,8 +171,10 @@ class YouTubeApp:
         self.search_canvas.create_window((0, 0), window=self.search_frame, anchor="nw")
         self.search_frame.bind("<Configure>", lambda e: self.search_canvas.configure(scrollregion=self.search_canvas.bbox("all")))
         self.search_result_widgets = []
-        # Enable mouse wheel scrolling for search results
-        self.search_canvas.bind_all("<MouseWheel>", self._on_mousewheel_search, add='+')
+        # Enable mouse wheel scrolling for search results (cross-platform)
+        self.search_canvas.bind_all("<MouseWheel>", self._on_mousewheel_search, add='+')  # Windows and Mac (delta)
+        self.search_canvas.bind_all("<Button-4>", self._on_mousewheel_search, add='+')    # Linux scroll up
+        self.search_canvas.bind_all("<Button-5>", self._on_mousewheel_search, add='+')    # Linux scroll down
 
         # --- Right: Playlist and Controls ---
         right_frame = Frame(main_frame, padx=8, pady=4)
@@ -197,8 +199,10 @@ class YouTubeApp:
         self.playlist_box = Listbox(right_frame, font=('Segoe UI', 10), width=40, height=24)
         self.playlist_box.grid(row=2, column=0, sticky="nsew")
         self.playlist_box.bind('<Double-1>', self.play_from_playlist_box)
-        # Enable mouse wheel scrolling for playlist
+        # Enable mouse wheel scrolling for playlist (cross-platform)
         self.playlist_box.bind('<MouseWheel>', self._on_mousewheel_playlist)
+        self.playlist_box.bind('<Button-4>', self._on_mousewheel_playlist)
+        self.playlist_box.bind('<Button-5>', self._on_mousewheel_playlist)
 
         # Playback controls (bottom of right frame)
         playback_frame = Frame(right_frame, pady=8)
@@ -216,11 +220,29 @@ class YouTubeApp:
         left_frame.grid(row=1, column=0, sticky="nsew")
         right_frame.grid(row=1, column=1, sticky="nsew")
     def _on_mousewheel_search(self, event):
-        # Windows: event.delta is multiple of 120
-        self.search_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        # Cross-platform mouse wheel support
+        if hasattr(event, 'delta'):
+            if event.delta > 0:
+                self.search_canvas.yview_scroll(-1, "units")
+            elif event.delta < 0:
+                self.search_canvas.yview_scroll(1, "units")
+        elif hasattr(event, 'num'):
+            if event.num == 4:
+                self.search_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.search_canvas.yview_scroll(1, "units")
 
     def _on_mousewheel_playlist(self, event):
-        self.playlist_box.yview_scroll(int(-1*(event.delta/120)), "units")
+        if hasattr(event, 'delta'):
+            if event.delta > 0:
+                self.playlist_box.yview_scroll(-1, "units")
+            elif event.delta < 0:
+                self.playlist_box.yview_scroll(1, "units")
+        elif hasattr(event, 'num'):
+            if event.num == 4:
+                self.playlist_box.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.playlist_box.yview_scroll(1, "units")
 
         # --- Add frames to main_frame grid ---
         main_frame.grid_rowconfigure(1, weight=1)
@@ -356,10 +378,22 @@ class YouTubeApp:
             self.mpv_ipc_path = r'\\.\pipe\mpv-pipe'
         else:
             self.mpv_ipc_path = f"/tmp/mpv-pipe-{os.getpid()}"
-        args = [MPV_PATH, f'--input-ipc-server={self.mpv_ipc_path}']
+        # Reduce mpv's in-memory buffer for faster opening
+        args = [
+            MPV_PATH,
+            f'--input-ipc-server={self.mpv_ipc_path}',
+            '--cache=yes',
+            '--cache-secs=1'
+        ]
+        # Set ytdl-format to match selected resolution for YouTube links
+        ytdl_res_map = {480: '480', 720: '720', 1080: '1080'}
+        ytdl_res = ytdl_res_map.get(max_res, '480')
         if audio_only:
             args.append('--no-video')
             args.append('--force-window=no')
+            args.append(f'--ytdl-format=bestaudio[ext=m4a]/bestaudio/best')
+        else:
+            args.append(f'--ytdl-format=bestvideo[height<={ytdl_res}]+bestaudio/best[height<={ytdl_res}]')
         # Start mpv at the selected index, passing the full playlist
         args.extend(mpv_playlist[self.playlist_index:] + mpv_playlist[:self.playlist_index])
         try:
