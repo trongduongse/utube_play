@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import os
 import re
@@ -238,7 +238,9 @@ class YouTubeApp:
         # Playback controls (bottom of right frame)
         playback_frame = Frame(right_frame, pady=8)
         playback_frame.grid(row=3, column=0, sticky="ew")
-        Button(playback_frame, text="Play/Pause", font=('Segoe UI', 10), command=self.play_pause).pack(side=LEFT, padx=4)
+        self.pause_button = Button(playback_frame, text="Pause", font=('Segoe UI', 10), command=self.play_pause)
+        self.pause_button.pack(side=LEFT, padx=4)
+        self.is_paused = False
         Button(playback_frame, text="Stop", font=('Segoe UI', 10), command=self.stop).pack(side=LEFT, padx=4)
         Button(playback_frame, text="Next", font=('Segoe UI', 10), command=self.next_track).pack(side=LEFT, padx=4)
         self.status_label = Label(playback_frame, text="Idle", bg='gray', width=10)
@@ -362,6 +364,9 @@ class YouTubeApp:
         self.play_from_playlist()
 
     def play_from_playlist(self):
+        # Reset pause state and button
+        self.is_paused = False
+        self.pause_button.config(text="Pause")
         if not self.playlist:
             return
         if self.playlist_index >= len(self.playlist):
@@ -392,7 +397,12 @@ class YouTubeApp:
         # Kill previous mpv
         if self.mpv_process and self.mpv_process.poll() is None:
             self.mpv_process.terminate()
-        self.mpv_ipc_path = r'\\.\pipe\mpv-pipe'
+        # Set IPC path for mpv (Windows: named pipe, Unix: unix socket)
+        import sys
+        if sys.platform == 'win32':
+            self.mpv_ipc_path = r'\\.\pipe\mpv-pipe'
+        else:
+            self.mpv_ipc_path = f"/tmp/mpv-pipe-{os.getpid()}"
         args = [MPV_PATH, f'--input-ipc-server={self.mpv_ipc_path}']
         if audio_only:
             args.append('--no-video')
@@ -430,28 +440,54 @@ class YouTubeApp:
             self._stopped_by_user = False
 
     def play_pause(self):
-        # Toggle pause for mpv using IPC (named pipe)
-        import json, time
+        # Toggle pause/resume for mpv using IPC (named pipe or unix socket)
+        import json, time, sys, os
         if self.mpv_process and self.mpv_process.poll() is None:
             try:
-                # Try to connect to the named pipe and send the pause command
-                import os
-                if not hasattr(self, 'mpv_ipc_path'):
-                    self.mpv_ipc_path = r'\\.\pipe\mpv-pipe'
-                # On Windows, open the named pipe as a file
-                for _ in range(10):
-                    try:
-                        mpv_pipe = open(self.mpv_ipc_path, 'w+b', buffering=0)
-                        break
-                    except Exception:
-                        time.sleep(0.1)
+                pause_state = not getattr(self, 'is_paused', False)
+                if sys.platform == 'win32':
+                    if not hasattr(self, 'mpv_ipc_path'):
+                        self.mpv_ipc_path = r'\\.\pipe\mpv-pipe'
+                    for _ in range(10):
+                        try:
+                            mpv_pipe = open(self.mpv_ipc_path, 'w+b', buffering=0)
+                            break
+                        except Exception:
+                            time.sleep(0.1)
+                    else:
+                        return
+                    cmd = {"command": ["set_property", "pause", pause_state]}
+                    mpv_pipe.write((json.dumps(cmd) + '\n').encode('utf-8'))
+                    mpv_pipe.flush()
+                    mpv_pipe.close()
                 else:
-                    return
-                # Send the pause toggle command
-                cmd = {"command": ["cycle", "pause"]}
-                mpv_pipe.write((json.dumps(cmd) + '\n').encode('utf-8'))
-                mpv_pipe.flush()
-                mpv_pipe.close()
+                    import socket
+                    if not hasattr(self, 'mpv_ipc_path') or self.mpv_ipc_path.startswith('\\'):
+                        self.mpv_ipc_path = f"/tmp/mpv-pipe-{os.getpid()}"
+                    for _ in range(10):
+                        try:
+                            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                            client.connect(self.mpv_ipc_path)
+                            break
+                        except Exception:
+                            time.sleep(0.1)
+                    else:
+                        return
+                    cmd = {"command": ["set_property", "pause", pause_state]}
+                    client.sendall((json.dumps(cmd) + '\n').encode('utf-8'))
+                    # Read at least one response line to avoid broken pipe
+                    try:
+                        client.settimeout(0.5)
+                        _ = client.recv(4096)
+                    except Exception:
+                        pass
+                    client.close()
+                self.is_paused = pause_state
+                # Update button text
+                if self.is_paused:
+                    self.pause_button.config(text="Resume")
+                else:
+                    self.pause_button.config(text="Pause")
             except Exception:
                 pass
 
