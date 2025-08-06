@@ -1,14 +1,37 @@
 #!/usr/bin/env python3
 
 
-import os, re, json, requests, subprocess, sys, threading, time, socket
+import os, re, json, requests, subprocess, sys, threading, time, socket, shutil
 from tkinter import *
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 from io import BytesIO
 
 
-MPV_PATH, YTDLP_PATH = "mpv", "yt-dlp"
+# --- Executable Path Resolution ---
+def find_executable(name, fallback_path):
+    """
+    Find executable in system PATH first, then try fallback path.
+    Returns the path if found, otherwise raises SystemExit with error message.
+    """
+    # Try system PATH first
+    path = shutil.which(name)
+    if path:
+        return path
+    
+    # Try fallback path
+    if os.path.isfile(fallback_path) and os.access(fallback_path, os.X_OK):
+        return fallback_path
+    
+    # Neither found - show error and exit
+    error_msg = f"Error: {name} executable not found!\n\nSearched locations:\n- System PATH\n- Fallback: {fallback_path}\n\nPlease install {name} or ensure it's in your PATH."
+    messagebox.showerror(f"{name} Not Found", error_msg)
+    print(error_msg, file=sys.stderr)
+    sys.exit(1)
+
+# Find executables with fallback paths
+MPV_PATH = find_executable("mpv", "/home/linuxbrew/.linuxbrew/bin/mpv")
+YTDLP_PATH = find_executable("yt-dlp", "/home/linuxbrew/.linuxbrew/bin/yt-dlp")
 CACHE_DIR = os.path.join(os.path.expanduser('~'), 'youtube_cache')
 AUTOSAVE_PATH = os.path.join(CACHE_DIR, 'autosave_playlist.m3u')
 os.makedirs(CACHE_DIR, exist_ok=True)
